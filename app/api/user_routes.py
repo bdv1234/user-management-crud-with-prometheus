@@ -4,6 +4,7 @@ from typing import List
 from app.database.connection import get_db
 from app.schemas.user import UserCreate, UserUpdate, UserResponse
 from app.services.user_service import UserService
+from app.models.user import User
 from app.monitoring.metrics import PrometheusMetrics
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])

@@ -28,7 +28,7 @@ class UserService:
         """Get user by username"""
         return self.db.query(User).filter(User.username == username).first()
     
-    def get_users(self, skip: int = 0, limit: int = 100) -> List(User):
+    def get_users(self, skip: int = 0, limit: int = 100) -> List[User]:
         """Get list of users with pagination"""
         return self.db.query(User).offset(skip).limit(limit).all()
     
