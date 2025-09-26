@@ -7,6 +7,13 @@ from app.models.user import Base, User
 from app.api.user_routes import router as user_router
 from app.monitoring.metrics import PrometheusMetrics, CONTENT_TYPE_LATEST
 import time
+from opentelemetry import trace
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -71,12 +78,31 @@ def get_metrics():
     total_users = db.query(User).count()
     active_users = db.query(User).filter(User.is_active == True).count()
     PrometheusMetrics.update_user_metrics(total_users, active_users)
+    PrometheusMetrics.update_system_metrics()
     db.close()
     
     return Response(
         content=PrometheusMetrics.get_metrics(),
         media_type=CONTENT_TYPE_LATEST
     )
+
+# OpenTelemetry Tracing Setup
+trace.set_tracer_provider(
+    TracerProvider(
+        resource=Resource.create({SERVICE_NAME: "user-mgt-pj"})
+    )
+)
+
+otlp_exporter = OTLPSpanExporter(
+    endpoint="localhost:4317",  # Jaeger OTLP gRPC endpoint
+    insecure=True
+)
+
+span_processor = BatchSpanProcessor(otlp_exporter)
+trace.get_tracer_provider().add_span_processor(span_processor)
+
+# Instrument FastAPI
+FastAPIInstrumentor.instrument_app(app)
 
 if __name__ == "__main__":
     import uvicorn

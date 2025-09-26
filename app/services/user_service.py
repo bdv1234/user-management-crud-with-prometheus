@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate
 from typing import List, Optional
+from opentelemetry import trace
 
 class UserService:
     def __init__(self, db: Session):
@@ -10,15 +11,17 @@ class UserService:
 
     def create_user(self, user_data: UserCreate) -> User:
         """Create a new user"""
-        db_user = User(**user_data.dict())
-        try:
-            self.db.add(db_user)
-            self.db.commit()
-            self.db.refresh(db_user)
-            return db_user
-        except IntegrityError:
-            self.db.rollback()
-            raise ValueError("username or email already exists")
+        tracer = trace.get_tracer(__name__)
+        with tracer.start_as_current_span("UserService.create_user"):
+            db_user = User(**user_data.dict())
+            try:
+                self.db.add(db_user)
+                self.db.commit()
+                self.db.refresh(db_user)
+                return db_user
+            except IntegrityError:
+                self.db.rollback()
+                raise ValueError("username or email already exists")
 
     def get_user(self, user_id: int) -> Optional[User]:
         """Get user by ID"""
