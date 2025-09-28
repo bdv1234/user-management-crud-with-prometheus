@@ -6,7 +6,10 @@ from app.database.connection import engine, get_db
 from app.models.user import Base, User
 from app.api.user_routes import router as user_router
 from app.monitoring.metrics import PrometheusMetrics, CONTENT_TYPE_LATEST
+from app.elasticsearch.client import es_client
+from app.logging.logging import app_logger
 import time
+import socket
 from opentelemetry import trace
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -33,23 +36,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Middleware for metrics collection
+# Middleware for metrics collection and ELK logging
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
     start_time = time.time()
+    client_ip = request.client.host if request.client else "unknown"
     
-    response = await call_next(request)
-    
-    # Record metrics
-    duration = time.time() - start_time
-    PrometheusMetrics.record_request(
+    # Log request start
+    app_logger.info(
+        "Request started",
         method=request.method,
         endpoint=request.url.path,
-        status=response.status_code,
-        duration=duration
+        client_ip=client_ip,
+        user_agent=request.headers.get("user-agent", "unknown")
     )
     
-    return response
+    try:
+        response = await call_next(request)
+        
+        # Record metrics
+        duration = time.time() - start_time
+        PrometheusMetrics.record_request(
+            method=request.method,
+            endpoint=request.url.path,
+            status=response.status_code,
+            duration=duration
+        )
+        
+        # Log to Elasticsearch
+        es_client.log_api_request(
+            method=request.method,
+            endpoint=request.url.path,
+            status_code=response.status_code,
+            duration=duration,
+            ip_address=client_ip
+        )
+        
+        # Log response
+        app_logger.info(
+            "Request completed",
+            method=request.method,
+            endpoint=request.url.path,
+            status_code=response.status_code,
+            duration_ms=duration * 1000,
+            client_ip=client_ip
+        )
+        
+        return response
+        
+    except Exception as e:
+        duration = time.time() - start_time
+        
+        # Log error to Elasticsearch
+        es_client.log_error(
+            error_type=type(e).__name__,
+            error_message=str(e),
+            request_id=getattr(request.state, 'request_id', None)
+        )
+        
+        # Log error
+        app_logger.error(
+            "Request failed",
+            method=request.method,
+            endpoint=request.url.path,
+            error=str(e),
+            duration_ms=duration * 1000,
+            client_ip=client_ip,
+            exc_info=True
+        )
+        
+        raise
 
 # Include routers
 app.include_router(user_router)
@@ -68,7 +124,19 @@ def root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    """Health check endpoint including Elasticsearch status"""
+    elasticsearch_healthy = es_client.health_check()
+    
+    health_status = {
+        "status": "healthy" if elasticsearch_healthy else "degraded",
+        "elasticsearch": "healthy" if elasticsearch_healthy else "unhealthy",
+        "timestamp": time.time()
+    }
+    
+    if not elasticsearch_healthy:
+        app_logger.warning("Elasticsearch health check failed")
+    
+    return health_status
 
 @app.get("/metrics")
 def get_metrics():

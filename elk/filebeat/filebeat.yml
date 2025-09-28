@@ -1,0 +1,19 @@
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/log/app_events.log
+  fields:
+    service: user-mgt-api
+    environment: development
+  fields_under_root: true
+  multiline.pattern: '^\d{4}-\d{2}-\d{2}'
+  multiline.negate: true
+  multiline.match: after
+
+output.logstash:
+  hosts: ["logstash:5044"]
+
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
